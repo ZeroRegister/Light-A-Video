@@ -7,8 +7,10 @@ import math
 from types import MethodType
 import safetensors.torch as sf
 import torch.nn.functional as F
+from diffusers import MotionAdapter, EulerAncestralDiscreteScheduler, AutoencoderKL
 from diffusers import UNet2DConditionModel, DPMSolverMultistepScheduler
 from diffusers.models.attention_processor import AttnProcessor2_0
+from transformers import CLIPTextModel, CLIPTokenizer
 from torch.hub import download_url_to_file
 
 # DDP imports
