@@ -259,26 +259,59 @@ def main(args):
             generator = torch.manual_seed(args.seed)
             video_list, _ = read_video(video_path, args.width, args.height)
             
-            with torch.no_grad():
-                 output = pipe(
-                    ic_light_pipe=ic_light_pipe,
-                    relight_prompt=relight_prompt,
-                    bg_source=bg_source,
-                    video=video_list,
-                    prompt=relight_prompt,
-                    strength=args.strength,
-                    negative_prompt=args.n_prompt,
-                    guidance_scale=args.text_guide_scale,
-                    num_inference_steps=num_inference_steps,
-                    height=args.height,
-                    width=args.width,
-                    generator=generator,
-                )
-                 
-                 frames = output.frames[0]
-                 save_file = os.path.join(args.output_folder, f"sim2real_{video_name_no_ext}.mp4") # Save as mp4 preferably
-                 imageio.mimwrite(save_file, frames, fps=8)
-                 print(f"[Rank {rank}] Saved to {save_file}")
+            # Chunking logic for long videos (AnimateDiff supports max 32 frames)
+            max_frames = 32
+            total_frames = len(video_list)
+            all_output_frames = []
+            
+            print(f"[Rank {rank}] Video has {total_frames} frames, processing in chunks of {max_frames}...")
+            
+            num_chunks = math.ceil(total_frames / max_frames)
+            
+            for chunk_idx in range(num_chunks):
+                start_idx = chunk_idx * max_frames
+                end_idx = min(start_idx + max_frames, total_frames)
+                chunk_video_list = video_list[start_idx:end_idx]
+                
+                actual_chunk_len = len(chunk_video_list)
+                
+                # Pad with last frame if chunk is smaller than max_frames
+                if actual_chunk_len < max_frames:
+                    # Repeat last frame to pad
+                    last_frame = chunk_video_list[-1]
+                    pad_count = max_frames - actual_chunk_len
+                    chunk_video_list = chunk_video_list + [last_frame] * pad_count
+                    print(f"[Rank {rank}] Chunk {chunk_idx+1}/{num_chunks}: frames {start_idx}-{end_idx-1}, padded {pad_count} frames")
+                else:
+                    print(f"[Rank {rank}] Chunk {chunk_idx+1}/{num_chunks}: frames {start_idx}-{end_idx-1}")
+                
+                with torch.no_grad():
+                    output = pipe(
+                        ic_light_pipe=ic_light_pipe,
+                        relight_prompt=relight_prompt,
+                        bg_source=bg_source,
+                        video=chunk_video_list,
+                        prompt=relight_prompt,
+                        strength=args.strength,
+                        negative_prompt=args.n_prompt,
+                        guidance_scale=args.text_guide_scale,
+                        num_inference_steps=num_inference_steps,
+                        height=args.height,
+                        width=args.width,
+                        generator=generator,
+                    )
+                    
+                    chunk_frames = output.frames[0]
+                    
+                    # Remove padded frames from the last chunk
+                    if actual_chunk_len < max_frames:
+                        chunk_frames = chunk_frames[:actual_chunk_len]
+                    
+                    all_output_frames.extend(chunk_frames)
+            
+            save_file = os.path.join(args.output_folder, f"sim2real_{video_name_no_ext}.mp4")
+            imageio.mimwrite(save_file, all_output_frames, fps=8)
+            print(f"[Rank {rank}] Saved {len(all_output_frames)} frames to {save_file}")
                  
         except Exception as e:
             print(f"[Rank {rank}] Error processing {video_name}: {e}")
